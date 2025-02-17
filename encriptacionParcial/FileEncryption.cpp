@@ -22,7 +22,7 @@ bool FileEncryption::isTextFile(const std::string& filename) {
     return true;
 }
 
-void FileEncryption::processFile(const std::string& inputFile, const std::string& outputFile, bool encrypt) {
+void FileEncryption::processFile(const std::string& inputFile, const std::string& outputFile, bool /* encrypt */) {
     int fdIn = open(inputFile.c_str(), O_RDONLY);
     if (fdIn == -1) {
         std::cerr << "Error al abrir el archivo de entrada" << std::endl;
