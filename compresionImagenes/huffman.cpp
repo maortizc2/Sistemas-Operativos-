@@ -1,12 +1,12 @@
 #include "huffman.h"
 #include <iostream>
-#include <fstream>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/stat.h>
 #include <queue>
 #include <unordered_map>
-#include <bitset>
 #include <vector>
 #include <string>
-
 
 void build_frequency_table(const std::vector<unsigned char>& data, std::unordered_map<unsigned char, int>& freq_table) {
     for (unsigned char byte : data) {
@@ -41,129 +41,99 @@ void build_huffman_codes(HuffmanNode* root, std::string code, std::unordered_map
     build_huffman_codes(root->right, code + "1", huffman_codes);
 }
 
-void write_bitstream(std::ofstream& output, const std::string& bitstream) {
-    // Escribir la secuencia de bits en bytes
-    unsigned char byte = 0;
-    int bit_count = 0;
-    for (char bit : bitstream) {
-        byte = (byte << 1) | (bit - '0');  // Desplazar y agregar el bit
-        bit_count++;
-        if (bit_count == 8) {
-            output.put(byte);  // Escribir el byte
-            byte = 0;
-            bit_count = 0;
-        }
-    }
-    
-    // Si hay bits sobrantes (menos de 8 bits), agregar un byte con el valor correspondiente
-    if (bit_count > 0) {
-        byte <<= (8 - bit_count);  // Rellenar con ceros
-        output.put(byte);
-    }
-}
-
 void compress_file(const std::string& filename) {
-    std::ifstream input(filename, std::ios::binary);
-    if (!input) {
-        std::cerr << "Error opening file for reading: " << filename << std::endl;
+    int fd = open(filename.c_str(), O_RDONLY);
+    if (fd == -1) {
+        std::cerr << "Error opening file: " << filename << std::endl;
         return;
     }
     
-    std::vector<unsigned char> data((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
-    input.close();
+    struct stat fileStat;
+    fstat(fd, &fileStat);
+    size_t fileSize = fileStat.st_size;
+    
+    std::vector<unsigned char> data(fileSize);
+    read(fd, data.data(), fileSize);
+    close(fd);
     
     std::unordered_map<unsigned char, int> freq_table;
     build_frequency_table(data, freq_table);
-    
     HuffmanNode* root = build_huffman_tree(freq_table);
     std::unordered_map<unsigned char, std::string> huffman_codes;
     build_huffman_codes(root, "", huffman_codes);
     
-    std::ofstream output(filename + ".huff", std::ios::binary);
-    if (!output) {
-        std::cerr << "Error opening file for writing: " << filename + ".huff" << std::endl;
+    int out_fd = open((filename + ".huff").c_str(), O_WRONLY | O_CREAT, 0644);
+    if (out_fd == -1) {
+        std::cerr << "Error opening output file" << std::endl;
         return;
     }
     
-    // Guardar la tabla de frecuencias para descompresión (esto debería ser más eficiente en una implementación real)
     for (const auto& pair : freq_table) {
-        output.put(pair.first);        // Escribir el byte
-        output.write(reinterpret_cast<const char*>(&pair.second), sizeof(pair.second));   // Escribir la frecuencia
+        write(out_fd, &pair.first, 1);
+        write(out_fd, &pair.second, sizeof(pair.second));
     }
-
-    // Escribir un delimitador para indicar el final de la tabla de frecuencias
-    output.put('\0');  // Usamos un byte nulo como delimitador
+    char delimiter = '\0';
+    write(out_fd, &delimiter, 1);
     
-    // Escribir la secuencia comprimida
     std::string bitstream;
     for (unsigned char byte : data) {
         bitstream += huffman_codes[byte];
     }
     
-    write_bitstream(output, bitstream);
-    output.close();
+    unsigned char byte = 0;
+    int bit_count = 0;
+    for (char bit : bitstream) {
+        byte = (byte << 1) | (bit - '0');
+        bit_count++;
+        if (bit_count == 8) {
+            write(out_fd, &byte, 1);
+            byte = 0;
+            bit_count = 0;
+        }
+    }
+    if (bit_count > 0) {
+        byte <<= (8 - bit_count);
+        write(out_fd, &byte, 1);
+    }
+    close(out_fd);
 }
 
 void decompress_file(const std::string& filename) {
-    std::ifstream input(filename, std::ios::binary);
-    if (!input) {
-        std::cerr << "Error opening file for reading: " << filename << std::endl;
+    int fd = open(filename.c_str(), O_RDONLY);
+    if (fd == -1) {
+        std::cerr << "Error opening file: " << filename << std::endl;
         return;
     }
     
-    // Recuperar la tabla de frecuencias
     std::unordered_map<unsigned char, int> freq_table;
-    char ch;
-    while (input.get(ch)) {
-        unsigned char byte = static_cast<unsigned char>(ch);
-        if (byte == '\0') {
-            break;  // Fin de la tabla de frecuencias
-        }
+    unsigned char byte;
+    while (read(fd, &byte, 1) > 0) {
+        if (byte == '\0') break;
         int freq;
-        input.read(reinterpret_cast<char*>(&freq), sizeof(freq));
-        if (!input) {
-            std::cerr << "Error reading frequency table." << std::endl;
-            return;
-        }
+        read(fd, &freq, sizeof(freq));
         freq_table[byte] = freq;
     }
-
-    // Reconstruir el árbol de Huffman a partir de la tabla de frecuencias
+    
     HuffmanNode* root = build_huffman_tree(freq_table);
-
-    // Abrir el archivo de salida
-    std::ofstream output(filename + ".decompressed", std::ios::binary);
-    if (!output) {
-        std::cerr << "Error opening file for writing: " << filename + ".decompressed" << std::endl;
-        delete root;
+    
+    int out_fd = open((filename + ".decompressed").c_str(), O_WRONLY | O_CREAT, 0644);
+    if (out_fd == -1) {
+        std::cerr << "Error opening output file" << std::endl;
+        close(fd);
         return;
     }
-
-    // Decodificar la secuencia de bits
+    
     HuffmanNode* current = root;
-    char bit;
-    while (input.get(bit)) {
+    unsigned char bitBuffer;
+    while (read(fd, &bitBuffer, 1) > 0) {
         for (int i = 7; i >= 0; --i) {
-            if (current->left == nullptr && current->right == nullptr) {
-                output.put(current->data);
+            current = (bitBuffer & (1 << i)) ? current->right : current->left;
+            if (!current->left && !current->right) {
+                write(out_fd, &current->data, 1);
                 current = root;
-            }
-
-            if ((bit >> i) & 1) {
-                current = current->right;
-            } else {
-                current = current->left;
             }
         }
     }
-
-    // Asegurarse de escribir el último carácter decodificado
-    if (current->left == nullptr && current->right == nullptr) {
-        output.put(current->data);
-    }
-
-    // Liberar memoria y cerrar archivos
-    delete root;
-    input.close();
-    output.close();
+    close(fd);
+    close(out_fd);
 }
