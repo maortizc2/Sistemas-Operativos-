@@ -128,7 +128,3 @@ Si tuviera más tiempo, podría:
 - Añadir estadísticas de compresión
 - Implementar compresión de carpetas completas
 - Añadir una interfaz gráfica simple
-
-## Nota técnica
-
-Este algoritmo es especialmente eficiente para comprimir imágenes con grandes áreas del mismo color, archivos de texto con caracteres repetidos o cualquier tipo de datos con alta redundancia. No es tan eficiente para datos sin patrones de repetición como imágenes fotográficas o audio comprimido.
